@@ -1,18 +1,9 @@
 """
 main.py
 
-FastAPI service exposing two endpoints for the (now-thin) SwiftUI client:
-
-  POST /symbolicate   -> runs atos, returns a symbolicated crash as JSON
-  POST /diagnose       -> runs the full agent loop, streaming steps back
-                          as newline-delimited JSON (NDJSON), one line
-                          per AgentStep, so the Swift UI can render the
-                          live "thinking out loud" transcript exactly
-                          like the original design intended.
-
-Run locally:
+FastAPI backend for CrashAgent. Run with:
   GROQ_API_KEY=sk-... python3 main.py
-  (serves on http://127.0.0.1:8000)
+Serves on http://127.0.0.1:8000
 """
 
 from __future__ import annotations
@@ -37,6 +28,8 @@ from groq_client import GroqClient, GroqConfig, DEFAULT_MODEL
 app = FastAPI(title="CrashAgent Backend")
 
 
+# ----- Pydantic models -----
+
 class SymbolicateRequest(BaseModel):
     crash_log_text: str
     binary_path: str
@@ -59,6 +52,26 @@ class SymbolicateResponse(BaseModel):
     exception_subtype: str
     frames: list[SymbolicatedFrameResponse]
 
+
+class DiagnoseRequest(BaseModel):
+    crash: SymbolicateResponse
+    codebase_root: str
+    groq_api_key: str
+    groq_model: str | None = None
+
+
+class ApplyFixRequest(BaseModel):
+    codebase_root: str
+    path: str
+    expected_old_content: str
+    new_content: str
+
+
+class ApplyFixResponse(BaseModel):
+    backup_path: str
+
+
+# ----- Endpoints -----
 
 @app.post("/symbolicate", response_model=SymbolicateResponse)
 def symbolicate(req: SymbolicateRequest) -> SymbolicateResponse:
@@ -90,20 +103,9 @@ def symbolicate(req: SymbolicateRequest) -> SymbolicateResponse:
     )
 
 
-class DiagnoseRequest(BaseModel):
-    crash: SymbolicateResponse
-    codebase_root: str
-    groq_api_key: str
-    groq_model: str | None = None
-
-
 @app.post("/diagnose")
 async def diagnose_endpoint(req: DiagnoseRequest):
-    """Streams AgentStep events as newline-delimited JSON. Each line is
-    a complete JSON object; the Swift client should read the response
-    body line by line (URLSession's bytes(for:) async sequence handles
-    this naturally)."""
-
+    """Streams AgentStep events as newline-delimited JSON (NDJSON)."""
     try:
         tool_runner = AgentToolRunner(req.codebase_root)
     except AgentToolError as e:
@@ -135,29 +137,9 @@ async def diagnose_endpoint(req: DiagnoseRequest):
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "atos_available": atos_available()}
-
-
-class ApplyFixRequest(BaseModel):
-    codebase_root: str
-    path: str                  # relative to codebase_root, as proposed
-    expected_old_content: str  # the file's content at proposal time (from the fix_proposed step)
-    new_content: str           # the agent's proposed replacement content
-
-
-class ApplyFixResponse(BaseModel):
-    backup_path: str
-
-
 @app.post("/apply_fix", response_model=ApplyFixResponse)
 def apply_fix_endpoint(req: ApplyFixRequest) -> ApplyFixResponse:
-    """Writes an approved fix to disk. Only ever called after the user
-    has reviewed the diff in the UI and explicitly clicked Approve --
-    nothing in the agent loop itself can reach this; propose_fix only
-    ever computes a diff, never writes. See agent_tools.apply_fix for
-    the backup-before-write and staleness-check behavior."""
+    """Writes an approved fix to disk with backup and staleness check."""
     try:
         backup_path = apply_fix(
             codebase_root=req.codebase_root,
@@ -166,13 +148,15 @@ def apply_fix_endpoint(req: ApplyFixRequest) -> ApplyFixResponse:
             new_content=req.new_content,
         )
     except AppliedFixError as e:
-        # Staleness ("changed on disk") gets 409 Conflict so the UI can
-        # distinguish "you need to re-diagnose" from a plain bad-request
-        # (missing file, bad path) which is 400.
         status = 409 if "changed on disk" in str(e) else 400
         raise HTTPException(status_code=status, detail=str(e)) from e
 
     return ApplyFixResponse(backup_path=backup_path)
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "atos_available": atos_available()}
 
 
 if __name__ == "__main__":

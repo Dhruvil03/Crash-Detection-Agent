@@ -1,0 +1,41 @@
+{"app_name":"MyApp","timestamp":"2026-06-19 19:40:00.00 -0700","app_version":"1.0","slice_uuid":"6b1f9f4e-3025-364f-9847-914fc1fe14d1","build_version":"1","platform":1,"bundleID":"com.example.MyApp","bug_type":"309","os_version":"macOS 15.4 (24E248)","incident_id":"3F7A1B2C-5D9E-4A3F-8B6C-2E4D6F8A0B1C","name":"MyApp"}
+{
+  "procName" : "MyApp",
+  "pid" : 7102,
+  "cpuType" : "ARM-64",
+  "exception" : {
+    "type" : "EXC_BREAKPOINT",
+    "signal" : "SIGTRAP",
+    "codes" : "0x0000000000000001, 0x0000000104a3f000"
+  },
+  "asi" : {
+    "libsystem_c.dylib" : [ "Fatal error: Unexpectedly found nil while unwrapping an Optional value" ]
+  },
+  "faultingThread" : 0,
+  "threads" : [
+    {
+      "triggered" : true,
+      "id" : 259821,
+      "name" : "Main Thread",
+      "frames" : [
+        { "imageOffset" : 28672, "imageIndex" : 0 },
+        { "imageOffset" : 29696, "imageIndex" : 0 },
+        { "imageOffset" : 65536, "symbol" : "closure #1 in Button.init", "symbolLocation" : 128, "imageIndex" : 1 },
+        { "imageOffset" : 86016, "symbol" : "NSApplication.run()", "symbolLocation" : 256, "imageIndex" : 2 }
+      ]
+    },
+    {
+      "triggered" : false,
+      "id" : 259822,
+      "frames" : [
+        { "imageOffset" : 74565, "symbol" : "kevent", "symbolLocation" : 10, "imageIndex" : 3 }
+      ]
+    }
+  ],
+  "usedImages" : [
+    { "base" : 4372807680, "size" : 65536, "uuid" : "6b1f9f4e-3025-364f-9847-914fc1fe14d1", "path" : "/MyApp.app/Contents/MacOS/MyApp", "name" : "MyApp" },
+    { "base" : 7281999872, "size" : 50000000, "uuid" : "a1b2c3d4-0000-0000-0000-000000000001", "path" : "/SwiftUI.framework/SwiftUI", "name" : "SwiftUI" },
+    { "base" : 7129436160, "size" : 30000000, "uuid" : "b2c3d4e5-0000-0000-0000-000000000002", "path" : "/AppKit.framework/AppKit", "name" : "AppKit" },
+    { "base" : 7174746112, "size" : 100000, "uuid" : "c3d4e5f6-0000-0000-0000-000000000003", "path" : "/usr/lib/system/libsystem_kernel.dylib", "name" : "libsystem_kernel.dylib" }
+  ]
+}

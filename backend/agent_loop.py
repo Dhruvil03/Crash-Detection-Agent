@@ -1,11 +1,9 @@
 """
 agent_loop.py
 
-The agent: a loop that gives the LLM context + tools, lets it call
-tools, feeds results back, and repeats until it produces a final answer
-instead of another tool call. Async generator so the FastAPI layer can
-stream steps to the Swift UI as they happen, matching the "live
-transcript" UX from the original design.
+The agent: gives the LLM context + tools, lets it call tools, feeds
+results back, and repeats until a final answer. Async generator so
+FastAPI can stream steps to the Swift UI as NDJSON.
 """
 
 from __future__ import annotations
@@ -17,7 +15,7 @@ from groq_client import GroqClient, GroqMessage, GroqClientError
 from agent_tools import AgentToolRunner, ALL_TOOLS
 from symbolication import SymbolicatedCrash
 
-MAX_STEPS = 8  # hard cap: prevents runaway tool-call loops on a confused model
+MAX_STEPS = 8
 
 StepType = Literal["thinking", "tool_call", "tool_result", "fix_proposed", "final_answer", "error"]
 
@@ -29,55 +27,34 @@ class AgentStep:
     tool_name: str | None = None
     tool_arguments: str | None = None
     tool_result: str | None = None
-    # populated only for type == "fix_proposed"
     fix_path: str | None = None
     fix_diff: str | None = None
     fix_explanation: str | None = None
-    fix_old_content: str | None = None  # needed by the client to call /apply_fix (staleness check)
-    fix_new_content: str | None = None  # needed by the client to call /apply_fix
+    fix_old_content: str | None = None
+    fix_new_content: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
 SYSTEM_PROMPT = """You are a senior iOS/macOS engineer diagnosing a crash. You will be \
-given a symbolicated stack trace (function names and file/line numbers \
-already resolved from raw addresses). Your job is to find the root \
-cause and propose a concrete fix, the way an experienced engineer \
-would: by actually reading the relevant code, not by guessing from the \
-trace alone.
+given a symbolicated stack trace. Your job is to find the root cause and propose a \
+concrete fix by actually reading the relevant code.
 
 Investigation approach:
-1. Look at the crashed frame -- the file and line number where the \
-crash occurred (typically frame 0 or 1 of the trace, inside the app's \
-own binary rather than system frameworks).
-2. Use read_file to look at the actual code around that line. Request \
-a reasonable window (e.g. 15-20 lines before and after) rather than the \
-whole file.
-3. If the crash involves a variable or property that might be set \
-elsewhere (e.g. force-unwrapping an optional, or a race condition), use \
-search_codebase to find where it's assigned or read elsewhere in the \
-codebase.
-4. Form a specific hypothesis about the root cause -- not a vague \
-"this might be a nil value" but the actual mechanism (e.g. "X is set \
-asynchronously in a network callback, but Y reads it synchronously on \
-viewDidLoad before that callback can fire").
-5. Once you know the fix, use propose_fix to record it -- pass the \
-file's COMPLETE new content (not a snippet or diff), so the system can \
-compute an exact diff for the user to review. propose_fix does NOT \
-modify any file; it only records a proposal the user must explicitly \
-approve. You may propose fixes to more than one file if the crash \
-requires changes in multiple places.
+1. Look at the crashed frame -- the file and line number where the crash occurred.
+2. Use read_file to look at the actual code around that line.
+3. If the crash involves a variable that might be set elsewhere (e.g. a force-unwrap, \
+race condition), use search_codebase to find where it's assigned.
+4. Form a specific hypothesis about the root cause.
+5. Once you know the fix, use propose_fix with the file's COMPLETE new content.
 
-Be efficient: don't read files you don't need, and don't search for \
-things unrelated to the crash. Stop investigating once you have enough \
-evidence to state a root cause with confidence.
+Be efficient: stop investigating once you have enough evidence to state a root cause.
 
 When you give your final answer, structure it as:
-ROOT CAUSE: <one or two sentences, naming the specific mechanism>
-EVIDENCE: <what you found in the code that supports this>
-SUGGESTED FIX: <one or two sentence summary -- if you called propose_fix, \
-say so here briefly; the user will review the actual diff separately>
+ROOT CAUSE: <one or two sentences>
+EVIDENCE: <what you found in the code>
+SUGGESTED FIX: <brief summary; if you called propose_fix, say so here>
 """
 
 
@@ -98,9 +75,6 @@ async def diagnose(
     groq_client: GroqClient,
     tool_runner: AgentToolRunner,
 ) -> AsyncGenerator[AgentStep, None]:
-    """Runs the full agent loop for one symbolicated crash, yielding
-    AgentStep events as they happen."""
-
     messages: list[GroqMessage] = [
         GroqMessage.system(SYSTEM_PROMPT),
         GroqMessage.user(format_crash_for_prompt(crash)),
@@ -126,7 +100,7 @@ async def diagnose(
 
         if not has_tool_calls:
             if not response.content:
-                yield AgentStep(type="error", text="Model returned an empty response with no tool calls.")
+                yield AgentStep(type="error", text="Model returned an empty response.")
             return
 
         messages.append(GroqMessage.assistant(content=response.content, tool_calls=response.tool_calls))
@@ -143,9 +117,6 @@ async def diagnose(
 
             yield AgentStep(type="tool_result", tool_name=name, tool_result=result)
 
-            # If this call added a new ProposedFix, surface it as its own
-            # structured step so the UI can render a diff + approve/reject
-            # control, separate from the plain-text tool_result above.
             if name == "propose_fix" and len(tool_runner.proposed_fixes) > proposals_before:
                 fix = tool_runner.proposed_fixes[-1]
                 yield AgentStep(
@@ -163,4 +134,4 @@ async def diagnose(
                 content=result,
             ))
 
-    yield AgentStep(type="error", text=f"Reached the maximum number of investigation steps ({MAX_STEPS}) without a final answer.")
+    yield AgentStep(type="error", text=f"Reached the maximum number of investigation steps ({MAX_STEPS}).")

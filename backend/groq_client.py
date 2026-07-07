@@ -1,13 +1,13 @@
 """
 groq_client.py
 
-Minimal client for Groq's OpenAI-compatible chat completions endpoint,
-with tool-calling support.
+Minimal async client for Groq's OpenAI-compatible chat completions
+endpoint with tool-calling support.
 
-Groq deprecated llama-3.3-70b-versatile on 2026-06-17; this defaults to
-openai/gpt-oss-120b, their recommended replacement for tool-calling /
-reasoning workloads. Check https://console.groq.com/docs/models if it's
-been a while -- Groq's lineup moves fast.
+Model note: llama-3.3-70b-versatile was deprecated by Groq on
+2026-06-17. Default is now openai/gpt-oss-120b. Override via the
+GROQ_MODEL env var or per-request groq_model field.
+Check https://console.groq.com/docs/models for the current lineup.
 """
 
 from __future__ import annotations
@@ -34,9 +34,6 @@ class GroqMessage:
     name: str | None = None
 
     def to_api_dict(self) -> dict:
-        """Serializes to the wire format, omitting None fields the way
-        the OpenAI-compatible API expects (it's picky about, e.g.,
-        tool_call_id being present only on role='tool' messages)."""
         d: dict = {"role": self.role}
         if self.content is not None:
             d["content"] = self.content
@@ -71,7 +68,7 @@ class GroqMessage:
 class GroqConfig:
     api_key: str
     model: str = DEFAULT_MODEL
-    temperature: float = 0.2  # low temperature: consistent diagnostic reasoning, not creativity
+    temperature: float = 0.2
     base_url: str = field(default_factory=lambda: os.environ.get("GROQ_BASE_URL", GROQ_CHAT_URL))
     timeout_seconds: float = 60.0
 
@@ -86,20 +83,11 @@ class GroqClient:
         if self._owns_client:
             await self._client.aclose()
 
-    async def chat(
-        self,
-        messages: list[GroqMessage],
-        tools: list[dict] | None = None,
-    ) -> GroqMessage:
-        """Sends one chat-completion turn. Returns the assistant's reply
-        message, which may contain tool_calls the caller should execute
-        and feed back via GroqMessage.tool_result(...) in the next turn."""
+    async def chat(self, messages: list[GroqMessage], tools: list[dict] | None = None) -> GroqMessage:
         if not self.config.api_key:
-            raise GroqClientError(
-                "No Groq API key configured. Set GROQ_API_KEY in your environment."
-            )
+            raise GroqClientError("No Groq API key configured. Set GROQ_API_KEY in your environment.")
 
-        payload = {
+        payload: dict = {
             "model": self.config.model,
             "messages": [m.to_api_dict() for m in messages],
             "temperature": self.config.temperature,
@@ -120,16 +108,15 @@ class GroqClient:
 
         if response.status_code < 200 or response.status_code >= 300:
             try:
-                err_body = response.json()
-                msg = err_body.get("error", {}).get("message", response.text)
-            except Exception:  # noqa: BLE001
+                msg = response.json().get("error", {}).get("message", response.text)
+            except Exception:
                 msg = response.text
             raise GroqClientError(f"Groq API error (HTTP {response.status_code}): {msg}")
 
         try:
             data = response.json()
-        except Exception as e:  # noqa: BLE001
-            raise GroqClientError(f"failed to decode Groq response as JSON: {e}") from e
+        except Exception as e:
+            raise GroqClientError(f"failed to decode Groq response: {e}") from e
 
         choices = data.get("choices", [])
         if not choices:
@@ -144,6 +131,7 @@ class GroqClient:
 
 
 def config_from_env() -> GroqConfig:
-    api_key = os.environ.get("GROQ_API_KEY", "")
-    model = os.environ.get("GROQ_MODEL", DEFAULT_MODEL)
-    return GroqConfig(api_key=api_key, model=model)
+    return GroqConfig(
+        api_key=os.environ.get("GROQ_API_KEY", ""),
+        model=os.environ.get("GROQ_MODEL", DEFAULT_MODEL),
+    )
